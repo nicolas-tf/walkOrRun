@@ -1,0 +1,276 @@
+---
+title: "Walk Or Run"
+author: "NM"
+date: "19 juillet 2017"
+output:
+  html_document:
+    fig_height: 4.5
+    highlight: pygments
+    number_sections: yes
+    theme: readable
+    toc: yes
+---
+
+# Introduction
+
+A simple test of creating time based features to enhance classification performance. 
+
+Basically, walking and running should be easy to differenciate by looking at acceleration variation on several sequencial samples.
+
+Don't hesitate to comment / improve this quick try !
+
+
+# Boilerplate 
+
+Loading package and data.
+Mainly :
+
+* dplyr / tidyr for data manipulation
+* ggplot2 / ggthemes / gridEXtra for plots
+* MASS / CARET for Classificaton-Regression FW
+  
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+library('MASS')
+library('caret')
+
+library('ggplot2') # visualization
+library('ggthemes') # visualization
+library('scales') # visualization
+library('lyr); library(dplyr)
+library('dplyr') # data manipulation
+library('tidyr') # data manipulation
+library('gridExtra')
+
+library("ROCR")
+library('stringr')
+library('data.table')
+library('zoo')
+
+#library('DescTools')
+
+setwd("~/repo/kaggle/walkOrRun/src/")
+
+set.seed(2017)
+select <- dplyr::select
+options(digits.secs=6)
+```
+
+# Data overview
+
+Load dataset :
+```{r}
+df <- fread('../input/dataset.csv', stringsAsFactors=TRUE)
+df <- mutate(df, class = ifelse(df$activity == 0, "Walk", "Run")) %>%
+      select(-activity, -date, -time, -username) %>% glimpse()
+df$class <- as.factor(df$class)
+```
+
+Quick overview of some key parameters :
+```{r}
+df %>% 
+  ggplot(aes(x=class, fill=class)) +
+  geom_bar()
+```
+
+Small descriptive graph of parameters distribution
+```{r}
+df %>%
+    gather( sensor, value, acceleration_x:gyro_z) %>%
+    ggplot( aes(x = factor(class), y = value)) + 
+    geom_jitter(alpha = 0.1) + geom_boxplot(color = "blue", outlier.colour = NA, fill = NA) +
+    facet_wrap(~sensor)
+```
+
+## Simple feature separation caracterization : LDA
+
+Preprocessing step :
+  - Only scale here (TBC)
+
+```{r}
+intrain   <- createDataPartition(y=df$class , p=0.7, list=FALSE)
+df_train  <- df[intrain,] ; df_test <- df[-intrain,]
+
+df_train_PP <- preProcess(df_train[names(df_train) != "class"], method = c("scale"))
+df_train_PP <- data.frame(predict(df_train_PP, df_train[names(df_train) != "class"]), class = df_train$class)
+```
+
+
+Simple feature $acceleration_x$ and $acceleration_y$ distribution graph per class :
+
+```{r}
+p1 <- ggplot(df_train_PP, aes(x = acceleration_x, y = acceleration_y, colour = factor(class))) + 
+      geom_point()
+
+p2 <- gather(df_train_PP, sensor, value, acceleration_x:acceleration_y) %>%
+      ggplot(aes(x =value)) + geom_histogram(bins = 100) + 
+      facet_grid(. ~ sensor, scales = "free_x")
+
+grid.arrange(p1, p2)
+```
+
+
+LDA processing and differenciability :
+
+```{r}
+r       <- lda(formula = class ~ ., data = df_train_PP)
+plda    <- predict(object = r,  newdata = df_train_PP)
+dataset <- data.frame(class = df_train_PP[,"class"], lda = plda$x)
+ggplot(dataset, aes(x=LD1,colour = class, fill = class)) + geom_density(alpha = 0.1)
+```
+
+
+# New Feature creation : Timeseries processing
+
+Main idea is to process Data and Time to construct a GMT object, ordering sample by this GMT and compute a median absolute deviation (MAD) to caracterize variability of acceleration / gyros parameters.
+
+```{r}
+windowsSize = 5 
+maxDeltaSecInWindow = 5
+
+dftps <- fread('../input/dataset.csv', stringsAsFactors=FALSE)
+dftps <- mutate(dftps, class = ifelse(dftps$activity == 0, "Walk", "Run"),
+                secAsFloat =  str_replace(gsub("[0-9]+:[0-9]+:", "", time), ":", "."),
+                gmt =  paste(date, gsub(":[0-9]+:[0-9]+$", "", time), sep='-'),
+                gmt =  paste(gmt, secAsFloat, sep = ':') ,
+                gmt =  as.POSIXct(strptime(gmt, "%Y-%m-%d-%H:%M:%OS"))) %>%
+        select(-activity, -username, -secAsFloat, -date, -time) %>% arrange(gmt)
+
+glimpse(dftps)
+```
+
+Determine valid time windows (ie. first gmt - last gmt < maxDeltaSecInWindow).
+Here, we take 5 samples windows and min max GMT on this window must no exceed 5s (conservative).
+
+```{r}
+windowsSize = 5 
+maxDeltaSecInWindow = 5
+```
+
+Perform rolling variance / rolling MAD on windowSize Timeframe
+```{r}
+dftps$mad_accel_x   <-  rollapply(dftps$acceleration_x, width=windowsSize, FUN=mad, align="center", partial=0)
+dftps$mad_accel_y   <-  rollapply(dftps$acceleration_y, width=windowsSize, FUN=mad, align="center", partial=0)
+dftps$mad_accel_z   <-  rollapply(dftps$acceleration_z, width=windowsSize, FUN=mad, align="center", partial=0)
+dftps$mad_gyro_x    <-  rollapply(dftps$gyro_x, width=windowsSize, FUN=mad, align="center", partial=0)
+dftps$mad_gyro_y    <-  rollapply(dftps$gyro_y, width=windowsSize, FUN=mad, align="center", partial=0)
+dftps$mad_gyro_z    <-  rollapply(dftps$gyro_z, width=windowsSize, FUN=mad, align="center", partial=0)
+
+dftps               <-  dftps %>%
+                        mutate(validity = ifelse(abs(gmt - lag(gmt,windowsSize)) < maxDeltaSecInWindow, 1, 0),
+                               mad_accel_x = ifelse( validity == 1, mad_accel_x, NA),
+                               mad_accel_y = ifelse( validity == 1, mad_accel_y, NA),
+                               mad_accel_z = ifelse( validity == 1, mad_accel_z, NA),
+                               mad_gyro_x = ifelse( validity == 1, mad_gyro_x, NA),
+                               mad_gyro_y = ifelse( validity == 1, mad_gyro_y, NA),
+                               mad_gyro_z = ifelse( validity == 1, mad_gyro_z, NA))
+glimpse(dftps)
+```
+
+
+## Simple feature separation caracterization for this timeseries derived feature
+
+```{r}
+intrain       <- createDataPartition(y=dftps$class , p=0.7, list=FALSE)
+dftps_train   <- dftps[intrain,]  %>% select(-gmt, -validity)
+dftps_test    <- dftps[-intrain,] %>% select(-gmt, -validity)
+
+dftps_train_PP   <- preProcess(dftps_train[names(dftps_train) != "class"], method = c("scale"))
+dftps_train_PP   <- data.frame(predict(dftps_train_PP, dftps_train[names(dftps_train) != "class"]), class = dftps_train$class)
+```
+
+Simple feature $acceleration_x$ and $acceleration_y$ distribution graph per class :
+
+```{r}
+p1 <- ggplot(dftps_train_PP, aes(x = mad_accel_x, y = mad_accel_y, colour = factor(class))) + 
+      geom_point()
+
+p2 <- gather(dftps_train_PP, sensor, value, mad_accel_x:mad_accel_y) %>%
+      ggplot(aes(x =value)) + geom_histogram(bins = 100) + 
+      facet_grid(. ~ sensor, scales = "free_x")
+
+grid.arrange(p1, p2)
+```
+
+
+LDA processing and Run / Walk differenciability :
+
+```{r waring='hide', message='hide'}
+r       <- lda(formula = class ~ ., data = dftps_train_PP)
+plda    <- suppressWarnings(predict(object = r,  newdata = dftps_train_PP))
+```
+
+Distribution plot :
+
+```{r}
+dataset <- data.frame(class = dftps_train_PP[,"class"], lda = plda$x)
+ggplot(dataset, aes(x=LD1, colour = class, fill = class)) + geom_density(alpha = 0.1)
+```
+
+Look nice ;)
+
+# Simple Model Fitting using temporal derived feature
+
+Simple Logistic Regression  (extracted from https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree on the same dataset)
+```{r}
+trControl <- trainControl(method = "cv",  number=10, verboseIter = FALSE)
+rf_fit <- caret::train(class ~   acceleration_x +
+                               acceleration_y +
+                               acceleration_z + 
+                               mad_accel_x +        
+                               mad_accel_y +
+                               mad_accel_z +
+                               mad_gyro_x + 
+                               mad_gyro_y + 
+                               mad_gyro_z + 
+                               gyro_x +
+                               gyro_y +
+                               gyro_z , 
+                data=dftps_train_PP, 
+                method = "C5.0",
+                preProcess = c("BoxCox", "center", "scale", "nzv"),
+                tuneLength = 7, 
+                trControl = trControl,
+                metric = 'Accuracy',
+                na.action = na.pass)
+c_50fit
+```
+
+```{r}
+model_logistic = glm(class ~   acceleration_x +
+                               acceleration_y +
+                               acceleration_z + 
+                               mad_accel_x +        
+                               mad_accel_y +
+                               mad_accel_z +
+                               mad_gyro_x + 
+                               mad_gyro_y + 
+                               mad_gyro_z + 
+                               gyro_x +
+                               gyro_y +
+                               gyro_z ,
+                               family=binomial(link='logit'), control = list(maxit = 50), data=dftps_train_PP)
+print(summary(model_logistic))
+
+# Apply the algorithm to the training sample
+prediction_training = predict(model_logistic, dftps_train_PP, type = "response")
+prediction_training = ifelse(prediction_training > 0.5, "Walk", "Run")
+error = mean(prediction_training != dftps_train_PP$class)
+print(paste('Model Accuracy after a split along the 0.5 probability',1-error))
+
+# Get the ROC curve and the AUC
+p = predict(model_logistic, dftps_train_PP, type="response")
+pr = prediction(p, dftps_train_PP$class)
+prf = performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+
+auc = performance(pr, measure = "auc")
+auc = auc@y.values[[1]]
+print(paste("General Model Accuracy", auc))
+```
+# To be done 
+
+* Better filtering to find 'coherent' time window of variable duration (zoo application ?)
+* Automatically determine window size (here, 5 sample length is arbitrary)
+* Work on more complex time based feature (MAD is quite a simple one)
+* Work harder on model fitting (here, simple copy / paste from https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree)
