@@ -37,8 +37,7 @@ library('caret')
 library('ggplot2') # visualization
 library('ggthemes') # visualization
 library('scales') # visualization
-library('lyr); library(dplyr)
-library('dplyr') # data manipulation
+library('plyr'); library('dplyr')
 library('tidyr') # data manipulation
 library('gridExtra')
 
