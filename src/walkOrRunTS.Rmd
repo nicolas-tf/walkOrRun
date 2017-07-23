@@ -3,6 +3,8 @@ title: "Walk Or Run"
 author: "NM"
 date: "19 juillet 2017"
 output:
+  md_document:
+    toc: yes
   html_document:
     fig_height: 4.5
     highlight: pygments
@@ -18,7 +20,13 @@ A simple test of creating time based features to enhance classification performa
 
 Basically, walking and running should be easy to differenciate by looking at acceleration variation on several sequencial samples.
 
-Don't hesitate to comment / improve this quick try !
+With a radial SVM kernel, classifier accuracy is given at 0.9961137
+
+To be done :
+* Better filtering to find 'coherent' time window of variable duration (zoo application ?)
+* Automatically determine window size (here, 5 sample length is arbitrary)
+* Work on more complex time based feature (MAD is quite a simple one)
+
 
 
 # Boilerplate 
@@ -42,12 +50,9 @@ library('plyr'); library('dplyr')
 library('tidyr') # data manipulation
 library('gridExtra')
 
-library("ROCR")
 library('stringr')
 library('data.table')
 library('zoo')
-
-#library('DescTools')
 
 setwd("~/repo/kaggle/walkOrRun/src/")
 
@@ -157,13 +162,8 @@ dftps$mad_gyro_y    <-  rollapply(dftps$gyro_y, width=windowsSize, FUN=mad, alig
 dftps$mad_gyro_z    <-  rollapply(dftps$gyro_z, width=windowsSize, FUN=mad, align="center", partial=0)
 
 dftps               <-  dftps %>%
-                        mutate(validity = ifelse(abs(gmt - lag(gmt,windowsSize)) < maxDeltaSecInWindow, 1, 0),
-                               mad_accel_x = ifelse( validity == 1, mad_accel_x, NA),
-                               mad_accel_y = ifelse( validity == 1, mad_accel_y, NA),
-                               mad_accel_z = ifelse( validity == 1, mad_accel_z, NA),
-                               mad_gyro_x = ifelse( validity == 1, mad_gyro_x, NA),
-                               mad_gyro_y = ifelse( validity == 1, mad_gyro_y, NA),
-                               mad_gyro_z = ifelse( validity == 1, mad_gyro_z, NA))
+                        mutate(temporalValidity = ifelse(abs(gmt - lag(gmt,windowsSize)) < maxDeltaSecInWindow, 1, 0),
+                               temporalValidity = ifelse(is.na(temporalValidity), 0, temporalValidity))
 glimpse(dftps)
 ```
 
@@ -172,8 +172,8 @@ glimpse(dftps)
 
 ```{r}
 intrain       <- createDataPartition(y=dftps$class , p=0.7, list=FALSE)
-dftps_train   <- dftps[intrain,]  %>% select(-gmt, -validity)
-dftps_test    <- dftps[-intrain,] %>% select(-gmt, -validity)
+dftps_train   <- dftps[intrain,]  %>% select(-gmt)
+dftps_test    <- dftps[-intrain,] %>% select(-gmt)
 
 dftps_train_PP   <- preProcess(dftps_train[names(dftps_train) != "class"], method = c("scale"))
 dftps_train_PP   <- data.frame(predict(dftps_train_PP, dftps_train[names(dftps_train) != "class"]), class = dftps_train$class)
@@ -209,12 +209,12 @@ ggplot(dataset, aes(x=LD1, colour = class, fill = class)) + geom_density(alpha =
 
 Look nice ;)
 
-# Simple Model Fitting using temporal derived feature
+# Model Fitting using temporal derived feature
 
-Simple Logistic Regression  (extracted from https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree on the same dataset)
-```{r, eval=FALSE, include=FALSE}
-trControl <- trainControl(method = "cv",  number=10, verboseIter = FALSE)
-rf_fit <- caret::train(class ~   acceleration_x +
+Simple SVM Radial training :
+```{r}
+trControl <- trainControl(method = "cv",  number=3, verboseIter = FALSE)
+SVMRadial_fit <- caret::train(class ~   acceleration_x +
                                acceleration_y +
                                acceleration_z + 
                                mad_accel_x +        
@@ -227,17 +227,24 @@ rf_fit <- caret::train(class ~   acceleration_x +
                                gyro_y +
                                gyro_z , 
                 data=dftps_train_PP, 
-                method = "C5.0",
-                preProcess = c("BoxCox", "center", "scale", "nzv"),
-                tuneLength = 7, 
+                method = "svmRadial",
+                preProcess = c("center", "scale"),
+                tuneLength = 5, 
                 trControl = trControl,
-                metric = 'Accuracy',
-                na.action = na.pass)
-c_50fit
+                metric = 'Accuracy')
+SVMRadial_fit
+```
+```{r}
+# Performances:
+p_SVMRad = predict(SVMRadial_fit, dftps_train_PP, type="raw")
+print(confusionMatrix(p_SVMRad, dftps_train_PP$class))
+postResample(p_SVMRad, dftps_train_PP$class)
 ```
 
+
+# Classical GLM :
 ```{r}
-model_logistic = glm(class ~   acceleration_x +
+model_logistic = caret::train(class ~   acceleration_x +
                                acceleration_y +
                                acceleration_z + 
                                mad_accel_x +        
@@ -249,28 +256,17 @@ model_logistic = glm(class ~   acceleration_x +
                                gyro_x +
                                gyro_y +
                                gyro_z ,
-                               family=binomial(link='logit'), control = list(maxit = 50), data=dftps_train_PP)
+                               method="glmnet",
+                               trControl = trControl,
+                               data=dftps_train_PP)
 print(summary(model_logistic))
-
-# Apply the algorithm to the training sample
-prediction_training = predict(model_logistic, dftps_train_PP, type = "response")
-prediction_training = ifelse(prediction_training > 0.5, "Walk", "Run")
-error = mean(prediction_training != dftps_train_PP$class)
-print(paste('Model Accuracy after a split along the 0.5 probability',1-error))
-
-# Get the ROC curve and the AUC
-p = predict(model_logistic, dftps_train_PP, type="response")
-pr = prediction(p, dftps_train_PP$class)
-prf = performance(pr, measure = "tpr", x.measure = "fpr")
-plot(prf)
-
-auc = performance(pr, measure = "auc")
-auc = auc@y.values[[1]]
-print(paste("General Model Accuracy", auc))
 ```
-# To be done 
 
-* Better filtering to find 'coherent' time window of variable duration (zoo application ?)
-* Automatically determine window size (here, 5 sample length is arbitrary)
-* Work on more complex time based feature (MAD is quite a simple one)
-* Work harder on model fitting (here, simple copy / paste from https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree)
+```{r}
+# Performances :
+p_GLM = predict(model_logistic, dftps_train_PP, type = "raw")
+print(confusionMatrix(p_GLM, dftps_train_PP$class))
+postResample(p_GLM, dftps_train_PP$class)
+```
+
+

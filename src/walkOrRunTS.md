@@ -8,9 +8,9 @@
     -   [Simple feature separation caracterization for this timeseries
         derived
         feature](#simple-feature-separation-caracterization-for-this-timeseries-derived-feature)
--   [Simple Model Fitting using temporal derived
-    feature](#simple-model-fitting-using-temporal-derived-feature)
--   [To be done](#to-be-done)
+-   [Model Fitting using temporal derived
+    feature](#model-fitting-using-temporal-derived-feature)
+-   [Classical GLM :](#classical-glm)
 
 Introduction
 ============
@@ -21,7 +21,12 @@ performance.
 Basically, walking and running should be easy to differenciate by
 looking at acceleration variation on several sequencial samples.
 
-Don't hesitate to comment / improve this quick try !
+With a radial SVM kernel, classifier accuracy is given at 0.9961137
+
+To be done : \* Better filtering to find 'coherent' time window of
+variable duration (zoo application ?) \* Automatically determine window
+size (here, 5 sample length is arbitrary) \* Work on more complex time
+based feature (MAD is quite a simple one)
 
 Boilerplate
 ===========
@@ -44,12 +49,9 @@ Loading package and data. Mainly :
     library('tidyr') # data manipulation
     library('gridExtra')
 
-    library("ROCR")
     library('stringr')
     library('data.table')
     library('zoo')
-
-    #library('DescTools')
 
     setwd("~/repo/kaggle/walkOrRun/src/")
 
@@ -181,40 +183,35 @@ Perform rolling variance / rolling MAD on windowSize Timeframe
     dftps$mad_gyro_z    <-  rollapply(dftps$gyro_z, width=windowsSize, FUN=mad, align="center", partial=0)
 
     dftps               <-  dftps %>%
-                            mutate(validity = ifelse(abs(gmt - lag(gmt,windowsSize)) < maxDeltaSecInWindow, 1, 0),
-                                   mad_accel_x = ifelse( validity == 1, mad_accel_x, NA),
-                                   mad_accel_y = ifelse( validity == 1, mad_accel_y, NA),
-                                   mad_accel_z = ifelse( validity == 1, mad_accel_z, NA),
-                                   mad_gyro_x = ifelse( validity == 1, mad_gyro_x, NA),
-                                   mad_gyro_y = ifelse( validity == 1, mad_gyro_y, NA),
-                                   mad_gyro_z = ifelse( validity == 1, mad_gyro_z, NA))
+                            mutate(temporalValidity = ifelse(abs(gmt - lag(gmt,windowsSize)) < maxDeltaSecInWindow, 1, 0),
+                                   temporalValidity = ifelse(is.na(temporalValidity), 0, temporalValidity))
     glimpse(dftps)
 
     ## Observations: 88,588
     ## Variables: 16
-    ## $ wrist          <int> 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,...
-    ## $ acceleration_x <dbl> 0.2650, 0.6722, 0.4399, 0.3031, 0.4814, 0.6320,...
-    ## $ acceleration_y <dbl> -0.7814, -1.1233, -1.4817, -0.8125, -0.9312, -1...
-    ## $ acceleration_z <dbl> -0.0076, -0.2344, 0.0722, 0.0888, 0.0359, -0.29...
-    ## $ gyro_x         <dbl> -0.0590, -0.1757, -0.9105, 0.1199, 0.0527, 0.05...
-    ## $ gyro_y         <dbl> 0.0325, 0.0208, 0.1063, -0.4099, 0.4379, -0.189...
-    ## $ gyro_z         <dbl> -2.9296, 0.1269, -2.4367, -2.9336, 2.4922, 0.44...
-    ## $ class          <chr> "Walk", "Walk", "Walk", "Walk", "Walk", "Walk",...
-    ## $ gmt            <dttm> 2017-06-30 13:51:15.847723, 2017-06-30 13:51:1...
-    ## $ mad_accel_x    <dbl> NA, NA, NA, NA, NA, 0.2232796, 0.2232796, 0.241...
-    ## $ mad_accel_y    <dbl> NA, NA, NA, NA, NA, 0.18621456, 0.18621456, 0.3...
-    ## $ mad_accel_z    <dbl> NA, NA, NA, NA, NA, 0.18369414, 0.18369414, 0.1...
-    ## $ mad_gyro_x     <dbl> NA, NA, NA, NA, NA, 0.09651726, 0.69682200, 0.6...
-    ## $ mad_gyro_y     <dbl> NA, NA, NA, NA, NA, 0.28465920, 0.04077150, 0.0...
-    ## $ mad_gyro_z     <dbl> NA, NA, NA, NA, NA, 3.031769, 3.031769, 2.79040...
-    ## $ validity       <dbl> NA, NA, NA, NA, NA, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+    ## $ wrist            <int> 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    ## $ acceleration_x   <dbl> 0.2650, 0.6722, 0.4399, 0.3031, 0.4814, 0.632...
+    ## $ acceleration_y   <dbl> -0.7814, -1.1233, -1.4817, -0.8125, -0.9312, ...
+    ## $ acceleration_z   <dbl> -0.0076, -0.2344, 0.0722, 0.0888, 0.0359, -0....
+    ## $ gyro_x           <dbl> -0.0590, -0.1757, -0.9105, 0.1199, 0.0527, 0....
+    ## $ gyro_y           <dbl> 0.0325, 0.0208, 0.1063, -0.4099, 0.4379, -0.1...
+    ## $ gyro_z           <dbl> -2.9296, 0.1269, -2.4367, -2.9336, 2.4922, 0....
+    ## $ class            <chr> "Walk", "Walk", "Walk", "Walk", "Walk", "Walk...
+    ## $ gmt              <dttm> 2017-06-30 13:51:15.847723, 2017-06-30 13:51...
+    ## $ mad_accel_x      <dbl> 0.2593067, 0.1296534, 0.2028197, 0.2232796, 0...
+    ## $ mad_accel_y      <dbl> 0.50690094, 0.25345047, 0.22209348, 0.2848074...
+    ## $ mad_accel_z      <dbl> 0.11831148, 0.07146132, 0.06449310, 0.0784295...
+    ## $ mad_gyro_x       <dbl> 0.17301942, 0.21912828, 0.17301942, 0.0996307...
+    ## $ mad_gyro_y       <dbl> 0.01734642, 0.06338115, 0.10941588, 0.3119390...
+    ## $ mad_gyro_z       <dbl> 0.7307735, 0.3683520, 0.7367039, 3.5067938, 2...
+    ## $ temporalValidity <dbl> 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
 
 Simple feature separation caracterization for this timeseries derived feature
 -----------------------------------------------------------------------------
 
     intrain       <- createDataPartition(y=dftps$class , p=0.7, list=FALSE)
-    dftps_train   <- dftps[intrain,]  %>% select(-gmt, -validity)
-    dftps_test    <- dftps[-intrain,] %>% select(-gmt, -validity)
+    dftps_train   <- dftps[intrain,]  %>% select(-gmt)
+    dftps_test    <- dftps[-intrain,] %>% select(-gmt)
 
     dftps_train_PP   <- preProcess(dftps_train[names(dftps_train) != "class"], method = c("scale"))
     dftps_train_PP   <- data.frame(predict(dftps_train_PP, dftps_train[names(dftps_train) != "class"]), class = dftps_train$class)
@@ -232,10 +229,6 @@ per class :
 
     grid.arrange(p1, p2)
 
-    ## Warning: Removed 1163 rows containing missing values (geom_point).
-
-    ## Warning: Removed 2326 rows containing non-finite values (stat_bin).
-
 ![](walkOrRunTS_files/figure-markdown_strict/unnamed-chunk-12-1.png)
 
 LDA processing and Run / Walk differenciability :
@@ -248,20 +241,112 @@ Distribution plot :
     dataset <- data.frame(class = dftps_train_PP[,"class"], lda = plda$x)
     ggplot(dataset, aes(x=LD1, colour = class, fill = class)) + geom_density(alpha = 0.1)
 
-    ## Warning: Removed 1163 rows containing non-finite values (stat_density).
-
 ![](walkOrRunTS_files/figure-markdown_strict/unnamed-chunk-14-1.png)
 
 Look nice ;)
 
-Simple Model Fitting using temporal derived feature
-===================================================
+Model Fitting using temporal derived feature
+============================================
 
-Simple Logistic Regression (extracted from
-<https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree>
-on the same dataset)
+Simple SVM Radial training :
 
-    model_logistic = glm(class ~   acceleration_x +
+    trControl <- trainControl(method = "cv",  number=3, verboseIter = FALSE)
+    SVMRadial_fit <- caret::train(class ~   acceleration_x +
+                                   acceleration_y +
+                                   acceleration_z + 
+                                   mad_accel_x +        
+                                   mad_accel_y +
+                                   mad_accel_z +
+                                   mad_gyro_x + 
+                                   mad_gyro_y + 
+                                   mad_gyro_z + 
+                                   gyro_x +
+                                   gyro_y +
+                                   gyro_z , 
+                    data=dftps_train_PP, 
+                    method = "svmRadial",
+                    preProcess = c("center", "scale"),
+                    tuneLength = 5, 
+                    trControl = trControl,
+                    metric = 'Accuracy')
+
+    ## Loading required package: kernlab
+
+    ## 
+    ## Attaching package: 'kernlab'
+
+    ## The following object is masked from 'package:scales':
+    ## 
+    ##     alpha
+
+    ## The following object is masked from 'package:ggplot2':
+    ## 
+    ##     alpha
+
+    SVMRadial_fit
+
+    ## Support Vector Machines with Radial Basis Function Kernel 
+    ## 
+    ## 62013 samples
+    ##    12 predictors
+    ##     2 classes: 'Run', 'Walk' 
+    ## 
+    ## Pre-processing: centered (12), scaled (12) 
+    ## Resampling: Cross-Validated (3 fold) 
+    ## Summary of sample sizes: 41342, 41342, 41342 
+    ## Resampling results across tuning parameters:
+    ## 
+    ##   C     Accuracy   Kappa    
+    ##   0.25  0.9913889  0.9827779
+    ##   0.50  0.9925338  0.9850677
+    ##   1.00  0.9932917  0.9865835
+    ##   2.00  0.9939529  0.9879058
+    ##   4.00  0.9945173  0.9890346
+    ## 
+    ## Tuning parameter 'sigma' was held constant at a value of 0.08578882
+    ## Accuracy was used to select the optimal model using  the largest value.
+    ## The final values used for the model were sigma = 0.08578882 and C = 4.
+
+    # Performances:
+    p_SVMRad = predict(SVMRadial_fit, dftps_train_PP, type="raw")
+    print(confusionMatrix(p_SVMRad, dftps_train_PP$class))
+
+    ## Confusion Matrix and Statistics
+    ## 
+    ##           Reference
+    ## Prediction   Run  Walk
+    ##       Run  30895    84
+    ##       Walk   161 30873
+    ##                                           
+    ##                Accuracy : 0.996           
+    ##                  95% CI : (0.9955, 0.9965)
+    ##     No Information Rate : 0.5008          
+    ##     P-Value [Acc > NIR] : < 2.2e-16       
+    ##                                           
+    ##                   Kappa : 0.9921          
+    ##  Mcnemar's Test P-Value : 1.201e-06       
+    ##                                           
+    ##             Sensitivity : 0.9948          
+    ##             Specificity : 0.9973          
+    ##          Pos Pred Value : 0.9973          
+    ##          Neg Pred Value : 0.9948          
+    ##              Prevalence : 0.5008          
+    ##          Detection Rate : 0.4982          
+    ##    Detection Prevalence : 0.4996          
+    ##       Balanced Accuracy : 0.9961          
+    ##                                           
+    ##        'Positive' Class : Run             
+    ## 
+
+    postResample(p_SVMRad, dftps_train_PP$class)
+
+    ##  Accuracy     Kappa 
+    ## 0.9960492 0.9920984
+
+Classical GLM :
+===============
+
+    model_logistic = caret::train(class ~   acceleration_x +
                                    acceleration_y +
                                    acceleration_z + 
                                    mad_accel_x +        
@@ -273,79 +358,80 @@ on the same dataset)
                                    gyro_x +
                                    gyro_y +
                                    gyro_z ,
-                                   family=binomial(link='logit'), control = list(maxit = 50), data=dftps_train_PP)
+                                   method="glmnet",
+                                   trControl = trControl,
+                                   data=dftps_train_PP)
 
-    ## Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred
+    ## Loading required package: glmnet
+
+    ## Loading required package: Matrix
+
+    ## 
+    ## Attaching package: 'Matrix'
+
+    ## The following object is masked from 'package:tidyr':
+    ## 
+    ##     expand
+
+    ## Loading required package: foreach
+
+    ## Loaded glmnet 2.0-10
 
     print(summary(model_logistic))
 
+    ##             Length Class      Mode     
+    ## a0            87   -none-     numeric  
+    ## beta        1044   dgCMatrix  S4       
+    ## df            87   -none-     numeric  
+    ## dim            2   -none-     numeric  
+    ## lambda        87   -none-     numeric  
+    ## dev.ratio     87   -none-     numeric  
+    ## nulldev        1   -none-     numeric  
+    ## npasses        1   -none-     numeric  
+    ## jerr           1   -none-     numeric  
+    ## offset         1   -none-     logical  
+    ## classnames     2   -none-     character
+    ## call           5   -none-     call     
+    ## nobs           1   -none-     numeric  
+    ## lambdaOpt      1   -none-     numeric  
+    ## xNames        12   -none-     character
+    ## problemType    1   -none-     character
+    ## tuneValue      2   data.frame list     
+    ## obsLevels      2   -none-     character
+    ## param          0   -none-     list
+
+    # Performances :
+    p_GLM = predict(model_logistic, dftps_train_PP, type = "raw")
+    print(confusionMatrix(p_GLM, dftps_train_PP$class))
+
+    ## Confusion Matrix and Statistics
     ## 
-    ## Call:
-    ## glm(formula = class ~ acceleration_x + acceleration_y + acceleration_z + 
-    ##     mad_accel_x + mad_accel_y + mad_accel_z + mad_gyro_x + mad_gyro_y + 
-    ##     mad_gyro_z + gyro_x + gyro_y + gyro_z, family = binomial(link = "logit"), 
-    ##     data = dftps_train_PP, control = list(maxit = 50))
+    ##           Reference
+    ## Prediction   Run  Walk
+    ##       Run  30066   459
+    ##       Walk   990 30498
+    ##                                           
+    ##                Accuracy : 0.9766          
+    ##                  95% CI : (0.9754, 0.9778)
+    ##     No Information Rate : 0.5008          
+    ##     P-Value [Acc > NIR] : < 2.2e-16       
+    ##                                           
+    ##                   Kappa : 0.9533          
+    ##  Mcnemar's Test P-Value : < 2.2e-16       
+    ##                                           
+    ##             Sensitivity : 0.9681          
+    ##             Specificity : 0.9852          
+    ##          Pos Pred Value : 0.9850          
+    ##          Neg Pred Value : 0.9686          
+    ##              Prevalence : 0.5008          
+    ##          Detection Rate : 0.4848          
+    ##    Detection Prevalence : 0.4922          
+    ##       Balanced Accuracy : 0.9766          
+    ##                                           
+    ##        'Positive' Class : Run             
     ## 
-    ## Deviance Residuals: 
-    ##     Min       1Q   Median       3Q      Max  
-    ## -4.3236  -0.0011   0.0078   0.0813   4.4376  
-    ## 
-    ## Coefficients:
-    ##                Estimate Std. Error z value Pr(>|z|)    
-    ## (Intercept)     3.62139    0.14392  25.163  < 2e-16 ***
-    ## acceleration_x -0.20376    0.05199  -3.919 8.89e-05 ***
-    ## acceleration_y -4.40919    0.09207 -47.887  < 2e-16 ***
-    ## acceleration_z  0.50233    0.05603   8.965  < 2e-16 ***
-    ## mad_accel_x    -6.98435    0.15380 -45.411  < 2e-16 ***
-    ## mad_accel_y    -2.15674    0.05406 -39.893  < 2e-16 ***
-    ## mad_accel_z    -3.98568    0.10879 -36.636  < 2e-16 ***
-    ## mad_gyro_x      0.23471    0.03393   6.918 4.59e-12 ***
-    ## mad_gyro_y      0.25157    0.03054   8.236  < 2e-16 ***
-    ## mad_gyro_z     -0.47691    0.03486 -13.680  < 2e-16 ***
-    ## gyro_x          0.03679    0.03715   0.990  0.32207    
-    ## gyro_y          0.08994    0.03479   2.585  0.00974 ** 
-    ## gyro_z         -0.20306    0.03553  -5.716 1.09e-08 ***
-    ## ---
-    ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-    ## 
-    ## (Dispersion parameter for binomial family taken to be 1)
-    ## 
-    ##     Null deviance: 84355.2  on 60849  degrees of freedom
-    ## Residual deviance:  7627.3  on 60837  degrees of freedom
-    ##   (1163 observations deleted due to missingness)
-    ## AIC: 7653.3
-    ## 
-    ## Number of Fisher Scoring iterations: 10
 
-    # Apply the algorithm to the training sample
-    prediction_training = predict(model_logistic, dftps_train_PP, type = "response")
-    prediction_training = ifelse(prediction_training > 0.5, "Walk", "Run")
-    error = mean(prediction_training != dftps_train_PP$class)
-    print(paste('Model Accuracy after a split along the 0.5 probability',1-error))
+    postResample(p_GLM, dftps_train_PP$class)
 
-    ## [1] "Model Accuracy after a split along the 0.5 probability NA"
-
-    # Get the ROC curve and the AUC
-    p = predict(model_logistic, dftps_train_PP, type="response")
-    pr = prediction(p, dftps_train_PP$class)
-    prf = performance(pr, measure = "tpr", x.measure = "fpr")
-    plot(prf)
-
-![](walkOrRunTS_files/figure-markdown_strict/unnamed-chunk-16-1.png)
-
-    auc = performance(pr, measure = "auc")
-    auc = auc@y.values[[1]]
-    print(paste("General Model Accuracy", auc))
-
-    ## [1] "General Model Accuracy 0.997059224460541"
-
-To be done
-==========
-
--   Better filtering to find 'coherent' time window of variable duration
-    (zoo application ?)
--   Automatically determine window size (here, 5 sample length
-    is arbitrary)
--   Work on more complex time based feature (MAD is quite a simple one)
--   Work harder on model fitting (here, simple copy / paste from
-    <https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree>)
+    ##  Accuracy     Kappa 
+    ## 0.9766339 0.9532690
