@@ -6,6 +6,7 @@ output:
   html_document:
     fig_height: 4.5
     highlight: pygments
+    keep_md: yes
     number_sections: yes
     theme: readable
     toc: yes
@@ -211,7 +212,7 @@ Look nice ;)
 # Simple Model Fitting using temporal derived feature
 
 Simple Logistic Regression  (extracted from https://www.kaggle.com/pcharambira/logistic-regression-vs-decision-tree on the same dataset)
-```{r}
+```{r, eval=FALSE, include=FALSE}
 trControl <- trainControl(method = "cv",  number=10, verboseIter = FALSE)
 rf_fit <- caret::train(class ~   acceleration_x +
                                acceleration_y +
