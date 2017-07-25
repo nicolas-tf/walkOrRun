@@ -49,6 +49,7 @@ library('scales') # visualization
 library('plyr'); library('dplyr')
 library('tidyr') # data manipulation
 library('gridExtra')
+library('corrplot')
 
 library('stringr')
 library('data.table')
@@ -168,7 +169,7 @@ glimpse(dftps)
 ```
 
 
-## Simple feature separation caracterization for this timeseries derived feature
+## Simple linear feature separation caracterization for this timeseries derived feature
 
 ```{r}
 intrain       <- createDataPartition(y=dftps$class , p=0.7, list=FALSE)
@@ -210,6 +211,27 @@ ggplot(dataset, aes(x=LD1, colour = class, fill = class)) + geom_density(alpha =
 Look nice ;)
 
 # Model Fitting using temporal derived feature
+
+First, simple correlation matrix.
+Not so excited, acceleration are correlated with acceleration, gyros with gyros ...
+```{r}
+corrDftps <- cor(select(dftps_train_PP, -class, -wrist, -temporalValidity))
+cex.before <- par("cex")
+par(cex = 0.7)
+corrplot(corrDftps, 
+         insig = "blank", 
+         method = "color",
+                  
+         addCoef.col="grey", 
+         order = "alphabet", 
+         tl.col="black", # colour of text label
+         tl.cex = 1/par("cex"),
+         cl.cex = 1/par("cex"), 
+         addCoefasPercent = TRUE)
+par(cex = cex.before)
+```
+
+
 
 Simple SVM Radial training :
 ```{r}
